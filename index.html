@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Lista de Canales con Detalles</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
+  <!-- HLS.js para .m3u8 -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <style>
+    body { background-color: #1a202c; color: white; }
+    /* Modal video */
+    #modal-video { display:none; position:fixed; inset:0; background:rgba(0,0,0,.8); justify-content:center; align-items:center; z-index:9999; }
+    #modal-video video { max-width:90vw; max-height:80vh; border-radius:12px; box-shadow:0 0 25px #00ffc3aa; background:black; }
+    #modal-video.active { display:flex; }
+    #modal-close { position:absolute; top:10px; right:15px; color:white; font-size:2rem; cursor:pointer; font-weight:bold; user-select:none; }
+
+    /* Modal categoría */
+    #modal-categoria { position:fixed; inset:0; background:rgba(0,0,0,.75); display:none; justify-content:center; align-items:center; z-index:10000; }
+    #modal-categoria.active { display:flex; }
+    #modal-categoria > div { background:#111827; padding:1.5rem; border-radius:.75rem; width:320px; box-shadow:0 0 15px #00ffc3aa; color:white; }
+    #modal-categoria input { width:100%; padding:.5rem; border-radius:.375rem; border:none; margin-bottom:1rem; font-size:1rem; color:black; }
+    #modal-categoria .buttons { display:flex; justify-content:flex-end; gap:.75rem; }
+    #modal-categoria button { padding:.5rem 1rem; border-radius:.375rem; border:none; cursor:pointer; font-weight:600; font-size:1rem; }
+    #modal-categoria .btn-cancel { background:#dc2626; color:white; }
+    #modal-categoria .btn-cancel:hover { background:#b91c1c; }
+    #modal-categoria .btn-confirm { background:#16a34a; color:white; }
+    #modal-categoria .btn-confirm:hover { background:#15803d; }
+
+    /* Cards */
+    .fav-on { filter: drop-shadow(0 0 6px #fbbf24); }
+    .card-img { transition: transform .25s ease; }
+    .card-img:hover { transform: scale(1.03); }
+    .canal-card:focus { outline: 3px solid #00ffc3; outline-offset: 2px; }
+
+    /* Controles Smart TV */
+    .tv-controls {
+      position: fixed; right: 12px; bottom: 12px; z-index: 12000;
+      display: grid; grid-template-columns: 56px 56px 56px; grid-template-rows: 56px 56px 56px; gap: 8px;
+      opacity: .9;
+    }
+    .tv-btn {
+      background: rgba(0,0,0,.6); border: 1px solid rgba(255,255,255,.15);
+      width: 56px; height:56px; border-radius: 12px; display:flex; align-items:center; justify-content:center;
+      font-size: 22px; user-select: none; cursor: pointer;
+    }
+    .tv-btn:active { transform: scale(.96); }
+  </style>
+</head>
+<body class="min-h-screen p-6">
+  <h1 class="text-3xl font-bold mb-3 text-center">Lista de Canales</h1>
+  <p class="text-center text-sm text-gray-300 mb-6">
+    Teclas: <b>↑↓←→</b> navegar • <b>Enter</b> reproducir • <b>F</b> favorito • <b>C</b> categoría • <b>Esc</b> cerrar
+  </p>
+
+  <!-- Controles superiores -->
+  <div class="mb-4 flex flex-wrap justify-center gap-3">
+    <input id="buscador" type="text" placeholder="Buscar por nombre, categoría o país..." class="text-black px-4 py-2 rounded w-72" />
+    <select id="categoria-select" class="text-black px-4 py-2 rounded">
+      <option value="todos">Todas las Categorías</option>
+    </select>
+    <label class="flex items-center gap-2 bg-gray-800 px-3 py-2 rounded cursor-pointer">
+      <input id="toggle-favs" type="checkbox" class="form-checkbox h-4 w-4 text-yellow-400">
+      <span>Ver solo favoritos</span>
+    </label>
+    <button id="btn-aleatorio" class="bg-blue-600 px-4 py-2 rounded hover:bg-blue-700">Canal Aleatorio</button>
+  </div>
+
+  <!-- Exportadores -->
+  <div class="mb-6 flex flex-wrap justify-center gap-3">
+    <button id="btn-exp-json" class="bg-green-600 px-4 py-2 rounded hover:bg-green-700">Exportar TODO (JSON)</button>
+    <button id="btn-exp-m3u"  class="bg-yellow-600 px-4 py-2 rounded hover:bg-yellow-700">Exportar TODO (M3U)</button>
+    <button id="btn-exp-json-fav" class="bg-green-700 px-4 py-2 rounded hover:bg-green-800">Exportar FAVORITOS (JSON)</button>
+    <button id="btn-exp-m3u-fav"  class="bg-yellow-700 px-4 py-2 rounded hover:bg-yellow-800">Exportar FAVORITOS (M3U)</button>
+  </div>
+
+  <!-- Carga de archivos -->
+  <div class="mb-6 flex flex-wrap justify-center gap-3">
+    <input type="file" id="archivo-input" accept=".json,.m3u,.m3u8" multiple class="text-white bg-gray-800 px-3 py-2 rounded cursor-pointer" />
+    <button id="btn-cargar" class="bg-purple-600 px-4 py-2 rounded hover:bg-purple-700">Cargar Listado(s)</button>
+    <button id="btn-autoload" class="bg-indigo-600 px-4 py-2 rounded hover:bg-indigo-700">Auto-load predeterminados</button>
+  </div>
+
+  <div id="canal-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6"></div>
+
+  <!-- Modal Reproducción -->
+  <div id="modal-video">
+    <div id="modal-close">&times;</div>
+    <video id="video-player" controls playsinline></video>
+  </div>
+
+  <!-- Modal Agregar Categoría -->
+  <div id="modal-categoria">
+    <div>
+      <h2 class="text-xl mb-4">Agregar Categoría</h2>
+      <input type="text" id="input-categoria" placeholder="Nombre de la categoría" autocomplete="off" />
+      <div class="buttons">
+        <button class="btn-cancel" id="btn-cat-cancel">Cancelar</button>
+        <button class="btn-confirm" id="btn-cat-ok">Agregar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controles Smart TV -->
+  <div class="tv-controls select-none">
+    <div></div>                              <div class="tv-btn" id="tv-up">▲</div>  <div></div>
+    <div class="tv-btn" id="tv-left">◀</div> <div class="tv-btn" id="tv-ok">⏯</div> <div class="tv-btn" id="tv-right">▶</div>
+                                              <div class="tv-btn" id="tv-down">▼</div>
+  </div>
+
+  <script>
+    // ---------- Estado ----------
+    let canales = [];                           // Lista total deduplicada
+    const STORAGE_CATS = 'canales_categorias_manual';
+    const STORAGE_FAVS = 'canales_favoritos';
+    let canalParaAgregarCategoria = null;
+    let hls = null;                             // instancia Hls
+    let focusIndex = 0;                         // índice del foco en el grid actual
+    let rendered = [];                          // cache del render actual (elementos)
+
+    // Rutas predeterminadas para autoload (ajústalas a tu hosting)
+    const AUTOLOAD_LIST = [
+      'update2.m3u',
+      'xumo.m3u',
+      'xiaomi.m3u',
+      'localnow.m3u'
+    ];
+
+    // ---------- Utilidades ----------
+    const slug = s => (s || '').toString().trim().toLowerCase();
+
+    function cargarCategoriasManuales() {
+      const data = localStorage.getItem(STORAGE_CATS);
+      return data ? JSON.parse(data) : {};
+    }
+    function guardarCategoriasManuales(data) {
+      localStorage.setItem(STORAGE_CATS, JSON.stringify(data));
+    }
+    function cargarFavoritos() {
+      const data = localStorage.getItem(STORAGE_FAVS);
+      return data ? JSON.parse(data) : {};
+    }
+    function guardarFavoritos(map) {
+      localStorage.setItem(STORAGE_FAVS, JSON.stringify(map));
+    }
+
+    // ---------- Parsers ----------
+    function normalizeFromJSON(arr) {
+      return arr.map(c => ({
+        nombre: c.nombre || c.name || "Canal sin nombre",
+        url: c.url || c.stream || "",
+        categoria: c.categoria || c.category || "Sin categoría",
+        pais: c.pais || c.country || "Desconocido",
+        descripcion: c.descripcion || c.description || "",
+        imagen: c.imagen || c.logo || "https://dummyimage.com/400x200/000/fff.png&text=Canal"
+      })).filter(c => c.url);
+    }
+
+    function parseM3U(texto) {
+      const lines = texto.split(/\r?\n/);
+      const out = [];
+      let lastInfo = null;
+
+      const parseAttrs = (line) => {
+        const attrs = {};
+        const re = /([\w-]+)=\"(.*?)\"/g;
+        let m;
+        while ((m = re.exec(line)) !== null) attrs[m[1]] = m[2];
+        return attrs;
+      };
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = (lines[i] || '').trim();
+        if (!line) continue;
+
+        if (line.startsWith('#EXTINF')) {
+          const attrs = parseAttrs(line);
+          const nameMatch = line.split(',');
+          const nombre = (nameMatch.length > 1 ? nameMatch.slice(1).join(',') : 'Canal sin nombre').trim();
+
+          lastInfo = {
+            nombre,
+            categoria: attrs['group-title'] || attrs['group_title'] || 'Sin categoría',
+            imagen: attrs['tvg-logo'] || attrs['logo'] || "https://dummyimage.com/400x200/000/fff.png&text=Canal",
+            pais: attrs['tvg-country'] || 'Desconocido',
+            descripcion: attrs['tvg-id'] ? `ID: ${attrs['tvg-id']}` : ''
+          };
+        } else if (!line.startsWith('#') && lastInfo) {
+          const url = line;
+          out.push({ ...lastInfo, url });
+          lastInfo = null;
+        }
+      }
+      return out;
+    }
+
+    // ---------- Merge y deduplicación ----------
+    function mergeCanales(nuevos) {
+      const mapa = new Map();
+      for (const c of canales) mapa.set(c.url, c);
+      for (const n of nuevos) {
+        const previo = mapa.get(n.url);
+        if (previo) {
+          mapa.set(n.url, { ...previo, ...n, imagen: n.imagen || previo.imagen });
+        } else {
+          mapa.set(n.url, n);
+        }
+      }
+      canales = Array.from(mapa.values());
+    }
+
+    // ---------- Carga inicial desde canales.json (opcional) ----------
+    async function cargarCanalesOpcional() {
+      try {
+        const res = await fetch('canales.json', { cache: 'no-store' });
+        if (!res.ok) throw new Error('sin canales.json');
+        const texto = await res.text();
+        const json = JSON.parse(texto);
+        const arr = normalizeFromJSON(json);
+        mergeCanales(arr);
+      } catch (_) {
+        // silencioso
+      }
+    }
+
+    // ---------- Cargar archivos del usuario ----------
+    function cargarDesdeArchivo() {
+      const input = document.getElementById('archivo-input');
+      if (!input.files.length) {
+        alert('Selecciona uno o más archivos (.json, .m3u, .m3u8).');
+        return;
+      }
+      const archivos = Array.from(input.files);
+      let pendientes = archivos.length;
+      const acumulados = [];
+
+      archivos.forEach(archivo => {
+        const nombre = archivo.name.toLowerCase();
+        const lector = new FileReader();
+
+        lector.onload = (e) => {
+          try {
+            const contenido = e.target.result;
+            let arr = [];
+            if (nombre.endsWith('.json')) {
+              const obj = JSON.parse(contenido);
+              if (!Array.isArray(obj)) throw new Error('El JSON debe ser un array de canales.');
+              arr = normalizeFromJSON(obj);
+            } else if (nombre.endsWith('.m3u') || nombre.endsWith('.m3u8')) {
+              arr = parseM3U(contenido);
+            }
+            acumulados.push(...arr);
+          } catch (err) {
+            alert(`Error leyendo ${archivo.name}: ${err.message}`);
+            console.error(err);
+          } finally {
+            pendientes--;
+            if (pendientes === 0) {
+              mergeCanales(acumulados);
+              generarCategorias();
+              renderizarCanales();
+            }
+          }
+        };
+
+        lector.onerror = () => {
+          alert(`No se pudo leer ${archivo.name}.`);
+          pendientes--;
+        };
+
+        lector.readAsText(archivo, 'UTF-8');
+      });
+    }
+
+    // ---------- Auto-load predeterminados ----------
+    async function autoloadPredeterminados() {
+      const acumulados = [];
+      for (const url of AUTOLOAD_LIST) {
+        try {
+          const res = await fetch(url, { cache: 'no-store' });
+          if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+          const txt = await res.text();
+
+          if (url.toLowerCase().endsWith('.json')) {
+            const obj = JSON.parse(txt);
+            if (Array.isArray(obj)) acumulados.push(...normalizeFromJSON(obj));
+          } else if (url.toLowerCase().endsWith('.m3u') || url.toLowerCase().endsWith('.m3u8')) {
+            acumulados.push(...parseM3U(txt));
+          }
+        } catch (e) {
+          console.warn(`No se pudo autoload: ${url} ->`, e.message);
+        }
+      }
+      if (acumulados.length) {
+        mergeCanales(acumulados);
+        generarCategorias();
+        renderizarCanales();
+        alert(`Autocargados: ${acumulados.length} canales.`);
+      } else {
+        alert('No se pudieron cargar los listados predeterminados (¿CORS?).');
+      }
+    }
+
+    // ---------- UI: categorías y render ----------
+    function generarCategorias() {
+      const select = document.getElementById('categoria-select');
+      select.innerHTML = '<option value="todos">Todas las Categorías</option>';
+
+      const manuales = cargarCategoriasManuales();
+      const setCat = new Set();
+      canales.forEach(c => setCat.add(c.categoria || 'Sin categoría'));
+      Object.values(manuales).forEach(list => list.forEach(cat => setCat.add(cat)));
+
+      Array.from(setCat).sort().forEach(cat => {
+        const opt = document.createElement('option');
+        opt.value = cat;
+        opt.textContent = cat;
+        select.appendChild(opt);
+      });
+
+      if (!select.listenerAdded) {
+        select.addEventListener('change', renderizarCanales);
+        select.listenerAdded = true;
+      }
+    }
+
+    function renderizarCanales() {
+      const grid = document.getElementById('canal-grid');
+      grid.innerHTML = '';
+
+      const manuales = cargarCategoriasManuales();
+      const favs = cargarFavoritos();
+
+      const filtroCat = document.getElementById('categoria-select').value || 'todos';
+      const q = slug(document.getElementById('buscador').value || '');
+      const soloFavs = document.getElementById('toggle-favs').checked;
+
+      const lista = canales.map(c => {
+        const manualCats = manuales[c.url] || [];
+        const esFav = !!favs[c.url];
+        return { ...c, manualCats, esFav };
+      });
+
+      const filtrados = lista.filter(c => {
+        const coincideCat = (filtroCat === 'todos') || c.categoria === filtroCat || c.manualCats.includes(filtroCat);
+        const texto = `${c.nombre} ${c.categoria} ${c.pais} ${c.manualCats.join(' ')}`.toLowerCase();
+        const coincideBusqueda = !q || texto.includes(q);
+        const coincideFav = !soloFavs || c.esFav;
+        return coincideCat && coincideBusqueda && coincideFav;
+      });
+
+      rendered = [];
+
+      filtrados.forEach((canal, idx) => {
+        const card = document.createElement('div');
+        card.className = 'bg-gray-800 rounded-2xl shadow-lg overflow-hidden flex flex-col canal-card';
+        card.setAttribute('tabindex', '0');
+        card.dataset.url = encodeURIComponent(canal.url);
+        card.dataset.idx = String(idx);
+
+        const favClass = canal.esFav ? 'fav-on' : '';
+
+        card.innerHTML = `
+          <div class="relative">
+            <img src="${canal.imagen}" alt="Logo" class="w-full h-48 object-cover card-img">
+            <button title="${canal.esFav ? 'Quitar de favoritos' : 'Agregar a favoritos'}"
+              class="absolute top-2 right-2 bg-black/60 hover:bg-black/80 transition px-2 py-1 rounded"
+              onclick="toggleFavorito('${encodeURIComponent(canal.url)}')">
+              <span class="${favClass}">⭐</span>
+            </button>
+          </div>
+          <div class="p-4 flex-grow flex flex-col">
+            <h2 class="text-xl font-semibold mb-1">${canal.nombre}</h2>
+            <p class="text-gray-300 text-sm mb-1"><strong>Categoría:</strong> ${canal.categoria}</p>
+            ${canal.manualCats.length ? `<p class="text-green-400 text-sm mb-1">Manual: ${canal.manualCats.join(', ')}</p>` : '<div class="mb-1"></div>'}
+            <p class="text-gray-300 text-sm mb-1"><strong>País:</strong> ${canal.pais}</p>
+            ${canal.descripcion ? `<p class="text-gray-400 text-sm mb-3">${canal.descripcion}</p>` : '<div class="mb-3"></div>'}
+            <div class="mt-auto flex gap-2 flex-wrap">
+              <button onclick="verCategoria('${encodeURIComponent(canal.categoria)}')" class="bg-indigo-600 px-3 py-1 rounded hover:bg-indigo-700 text-sm flex-grow">Ver categoría</button>
+              <button onclick="reproducirCanal('${encodeURIComponent(canal.url)}')" class="bg-blue-600 px-3 py-1 rounded hover:bg-blue-700 text-sm flex-grow">Reproducir</button>
+              <button onclick="agregarCategoriaManual('${encodeURIComponent(canal.url)}')" class="bg-green-600 px-3 py-1 rounded hover:bg-green-700 text-sm flex-grow">Agregar a categoría</button>
+            </div>
+          </div>
+        `;
+        grid.appendChild(card);
+        rendered.push(card);
+      });
+
+      // Reset/ajuste de foco seguro
+      if (rendered.length) {
+        if (focusIndex < 0) focusIndex = 0;
+        if (focusIndex >= rendered.length) focusIndex = rendered.length - 1;
+        setFocus(focusIndex);
+      } else {
+        focusIndex = 0;
+      }
+    }
+
+    // ---------- Buscador / Filtros / Favoritos ----------
+    document.getElementById('buscador').addEventListener('input', renderizarCanales);
+    document.getElementById('toggle-favs').addEventListener('change', renderizarCanales);
+    document.getElementById('categoria-select').addEventListener('change', () => { focusIndex = 0; });
+
+    function verCategoria(catEncoded) {
+      const categoria = decodeURIComponent(catEncoded);
+      const select = document.getElementById('categoria-select');
+      select.value = categoria;
+      focusIndex = 0;
+      renderizarCanales();
+    }
+
+    function toggleFavorito(urlEncoded) {
+      const url = decodeURIComponent(urlEncoded);
+      const favs = cargarFavoritos();
+      if (favs[url]) delete favs[url]; else favs[url] = true;
+      guardarFavoritos(favs);
+      renderizarCanales();
+    }
+
+    // ---------- Reproducción ----------
+    function reproducirAleatorio() {
+      if (!canales.length) return;
+      const visCards = rendered;
+      if (!visCards.length) return;
+      const rand = visCards[Math.floor(Math.random() * visCards.length)];
+      const url = decodeURIComponent(rand.dataset.url);
+      reproducirCanal(encodeURIComponent(url));
+    }
+
+    function reproducirCanal(urlEncoded) {
+      const url = decodeURIComponent(urlEncoded);
+      const modal = document.getElementById('modal-video');
+      const video = document.getElementById('video-player');
+
+      if (hls) { try { hls.destroy(); } catch (_) {} hls = null; }
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+
+      const isHls = /\.m3u8(\?|$)/i.test(url);
+      if (isHls && Hls.isSupported()) {
+        hls = new Hls({ maxBufferLength: 30 });
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          modal.classList.add('active');
+          video.play().catch(()=>{});
+        });
+        hls.on(Hls.Events.ERROR, (ev, data) => {
+          console.error('HLS error', data);
+          if (data.fatal) alert('Error al reproducir el stream HLS.');
+        });
+      } else {
+        video.src = url;
+        modal.classList.add('active');
+        video.play().catch(()=>{});
+      }
+    }
+
+    function cerrarModal() {
+      const modal = document.getElementById('modal-video');
+      const video = document.getElementById('video-player');
+      if (hls) { try { hls.destroy(); } catch (_) {} hls = null; }
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      modal.classList.remove('active');
+    }
+
+    // Cerrar modal con click fuera o Esc
+    document.getElementById('modal-video').addEventListener('click', e => {
+      if (e.target.id === 'modal-video') cerrarModal();
+    });
+    document.getElementById('modal-close').addEventListener('click', cerrarModal);
+
+    window.addEventListener('keydown', (e) => {
+      if (document.getElementById('modal-video').classList.contains('active')) {
+        if (e.key === 'Escape' || e.key === 'Backspace') cerrarModal();
+        return;
+      }
+      const cols = getComputedStyle(document.getElementById('canal-grid')).gridTemplateColumns.split(' ').length || 4;
+      if (!rendered.length) return;
+
+      if (['ArrowDown','ArrowUp','ArrowLeft','ArrowRight','Enter','f','F','c','C','Escape','Backspace'].includes(e.key)) {
+        e.preventDefault();
+      }
+
+      if (e.key === 'ArrowRight') moveFocus(1);
+      if (e.key === 'ArrowLeft')  moveFocus(-1);
+      if (e.key === 'ArrowDown')  moveFocus(cols);
+      if (e.key === 'ArrowUp')    moveFocus(-cols);
+
+      if (e.key === 'Enter') {
+        const url = decodeURIComponent(rendered[focusIndex].dataset.url);
+        reproducirCanal(encodeURIComponent(url));
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        const url = decodeURIComponent(rendered[focusIndex].dataset.url);
+        toggleFavorito(encodeURIComponent(url));
+      }
+      if (e.key === 'c' || e.key === 'C') {
+        const url = decodeURIComponent(rendered[focusIndex].dataset.url);
+        agregarCategoriaManual(encodeURIComponent(url));
+      }
+      if (e.key === 'Escape' || e.key === 'Backspace') {
+        // nada por ahora (reservado)
+      }
+    });
+
+    function setFocus(idx) {
+      if (!rendered.length) return;
+      if (idx < 0) idx = 0;
+      if (idx >= rendered.length) idx = rendered.length - 1;
+      focusIndex = idx;
+      rendered.forEach((el, i) => { if (i === focusIndex) el.focus(); });
+      rendered[focusIndex].scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    }
+    function moveFocus(delta) { setFocus(focusIndex + delta); }
+
+    // ---------- Modal Categoría ----------
+    function agregarCategoriaManual(urlEncoded) {
+      canalParaAgregarCategoria = decodeURIComponent(urlEncoded);
+      document.getElementById('input-categoria').value = '';
+      document.getElementById('modal-categoria').classList.add('active');
+      setTimeout(() => document.getElementById('input-categoria').focus(), 50);
+    }
+    function cerrarModalCategoria() {
+      document.getElementById('modal-categoria').classList.remove('active');
+      canalParaAgregarCategoria = null;
+    }
+    function confirmarAgregarCategoria() {
+      const categoria = (document.getElementById('input-categoria').value || '').trim();
+      if (!categoria) { alert('Escribe un nombre válido.'); return; }
+      const manuales = cargarCategoriasManuales();
+      if (!manuales[canalParaAgregarCategoria]) manuales[canalParaAgregarCategoria] = [];
+      if (!manuales[canalParaAgregarCategoria].includes(categoria)) {
+        manuales[canalParaAgregarCategoria].push(categoria);
+        guardarCategoriasManuales(manuales);
+        alert(`Categoría "${categoria}" agregada.`);
+        generarCategorias();
+        renderizarCanales();
+      } else {
+        alert('El canal ya tiene esa categoría.');
+      }
+      cerrarModalCategoria();
+    }
+
+    // ---------- Exportadores (TODO y Favoritos) ----------
+    function descargarArchivo(filename, mime, dataStr) {
+      const blob = new Blob([dataStr], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function exportarJSON(lista) {
+      descargarArchivo('canales_exportados.json', 'application/json', JSON.stringify(lista, null, 2));
+    }
+    function exportarM3U(lista) {
+      let m3u = '#EXTM3U\n';
+      lista.forEach(c => {
+        const nombre = c.nombre?.replace(/\n/g, ' ') || 'Canal';
+        const logo = c.imagen || '';
+        const cat = c.categoria || 'Sin categoría';
+        const pais = c.pais || '';
+        m3u += `#EXTINF:-1 tvg-logo="${logo}" group-title="${cat}" tvg-country="${pais}",${nombre}\n${c.url}\n`;
+      });
+      descargarArchivo('canales_exportados.m3u', 'application/x-mpegURL', m3u);
+    }
+
+    function getListaFavoritos() {
+      const favs = cargarFavoritos();
+      return canales.filter(c => !!favs[c.url]);
+    }
+
+    // ---------- Listeners de botones ----------
+    document.getElementById('btn-aleatorio').addEventListener('click', reproducirAleatorio);
+    document.getElementById('btn-cargar').addEventListener('click', cargarDesdeArchivo);
+    document.getElementById('btn-autoload').addEventListener('click', autoloadPredeterminados);
+    document.getElementById('btn-exp-json').addEventListener('click', () => exportarJSON(canales));
+    document.getElementById('btn-exp-m3u').addEventListener('click', () => exportarM3U(canales));
+    document.getElementById('btn-exp-json-fav').addEventListener('click', () => {
+      const favs = getListaFavoritos(); 
+      if (!favs.length) return alert('No hay favoritos.');
+      exportarJSON(favs);
+    });
+    document.getElementById('btn-exp-m3u-fav').addEventListener('click', () => {
+      const favs = getListaFavoritos(); 
+      if (!favs.length) return alert('No hay favoritos.');
+      exportarM3U(favs);
+    });
+
+    // Modal categoría listeners
+    document.getElementById('btn-cat-cancel').addEventListener('click', cerrarModalCategoria);
+    document.getElementById('btn-cat-ok').addEventListener('click', confirmarAgregarCategoria);
+
+    // Botones Smart TV
+    document.getElementById('tv-up').addEventListener('click', () => moveFocus(-getCols()));
+    document.getElementById('tv-down').addEventListener('click', () => moveFocus(getCols()));
+    document.getElementById('tv-left').addEventListener('click', () => moveFocus(-1));
+    document.getElementById('tv-right').addEventListener('click', () => moveFocus(1));
+    document.getElementById('tv-ok').addEventListener('click', () => {
+      if (!rendered.length) return;
+      const url = decodeURIComponent(rendered[focusIndex].dataset.url);
+      reproducirCanal(encodeURIComponent(url));
+    });
+
+    function getCols() {
+      return getComputedStyle(document.getElementById('canal-grid')).gridTemplateColumns.split(' ').length || 4;
+    }
+
+    // ---------- Inicio ----------
+    (async function init() {
+      await cargarCanalesOpcional();    // intenta leer canales.json si existe
+      generarCategorias();
+      renderizarCanales();
+    })();
+  </script>
+</body>
+</html>
